@@ -6,7 +6,7 @@ ext["ossrhUsername"] = ''
 ext["ossrhPassword"] = ''
 ext["signing.keyId"] = ''
 ext["signing.password"] = ''
-ext["signing.secretKeyRingFile"] = ''
+ext["signing.key"] = ''
 ext["sonatypeStagingProfileId"] = ''
 
 File secretPropsFile = project.rootProject.file('local.properties')
@@ -21,43 +21,49 @@ if (secretPropsFile.exists()) {
     ext["ossrhPassword"] = System.getenv('OSSRH_PASSWORD')
     ext["signing.keyId"] = System.getenv('SIGNING_KEY_ID')
     ext["signing.password"] = System.getenv('SIGNING_PASSWORD')
-    ext["signing.secretKeyRingFile"] = System.getenv('SIGNING_SECRET_KEY_RING_FILE')
+    ext["signing.key"] = System.getenv('SIGNING_KEY')
     ext["sonatypeStagingProfileId"] = System.getenv('SONATYPE_STAGING_PROFILE_ID')
 }
 
+// The following makes the key available for publishing to Nexus
+// export ORG_GRADLE_PROJECT_sonatypeUsername=${token name}
+// export ORG_GRADLE_PROJECT_sonatypePassword=${token password}
+// After making the Gradle properties above available, you can try publish using
+// ./gradlew publishToSonatype
+// ./gradlew publishToSonatype closeAndReleaseSonatypeStagingRepository
+
 nexusPublishing {
     repositories {
+        //sonatype()
         sonatype {
+            nexusUrl.set(uri("https://s01.oss.sonatype.org/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://s01.oss.sonatype.org/content/repositories/snapshots/"))
+
+            version = rootProject.version
             stagingProfileId = sonatypeStagingProfileId
             username = ossrhUsername
             password = ossrhPassword
         }
     }
+
+    // these are not strictly required. The default timeouts are set to 1 minute. But Sonatype can be really slow.
+    // If you get the error "java.net.SocketTimeoutException: timeout", these lines will help.
+    connectTimeout = Duration.ofMinutes(3)
+    clientTimeout = Duration.ofMinutes(3)
 }
 
-task javadocJar(type: Jar) {
-    classifier = 'javadoc'
-    from javadoc
-}
 
-task sourcesJar(type: Jar) {
-    classifier = 'sources'
-    from sourceSets.main.allSource
-}
 
-artifacts {
-    archives javadocJar, sourcesJar
-}
 
 afterEvaluate {
     publishing {
         publications {
-        	release(MavenPublication) {
-        		from components.java
-            	artifactId 'stream-chat-java'
+            release(MavenPublication) {
+                from components.java
+                artifactId 'stream-chat-java'
+                groupId rootProject.group
+                version rootProject.version
 
-                artifact sourcesJar
-                artifact javadocJar
 
                 pom {
                     name = "Stream Chat official Java API Client"
@@ -87,8 +93,32 @@ afterEvaluate {
     }
 }
 
-signing {
-    sign publishing.publications
+
+// For signing you need to make signingKey and signingPassword available properties
+// See https://docs.gradle.org/current/userguide/signing_plugin.html
+// The following makes the key available via the Gradle Property signingKey
+// export ORG_GRADLE_PROJECT_signingKey=`cat test-private.pgp`
+// export ORG_GRADLE_PROJECT_signingPassword="password"
+// After making the Gradle properties above available, you can try signing using
+// ./gradlew signMavenPublication
+//
+def hasSigningKey = rootProject.ext["signing.keyId"] || rootProject.ext["signing.key"]
+if(hasSigningKey) {
+    sign(project)
+}
+void sign(Project project) {
+    project.signing {
+        required { project.gradle.taskGraph.hasTask("publish") }
+        def signingKeyId = rootProject.ext["signing.keyId"]
+        def signingKey = rootProject.ext["signing.key"]
+        def signingPassword = rootProject.ext["signing.password"]
+        if (signingKeyId) {
+            useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+        } else if (signingKey) {
+            useInMemoryPgpKeys(signingKey, signingPassword)
+        }
+        sign publishing.publications
+    }
 }
 
 javadoc {
